@@ -203,13 +203,11 @@ What this shows:
 
 ## Design Decisions
 
-To be completed later.
+I chose a content-based recommender because it fits the data and the goals of the project. The catalog is small and does not include user listening histories, ratings, or interaction logs, so collaborative filtering would not have been realistic. A content-based approach lets the system use directly available song attributes like mood, energy, valence, acousticness, popularity, and complexity to produce recommendations in a way that is easy to explain and defend.
 
-Use this section to explain:
+I integrated the reliability audit into the main pipeline because I wanted evaluation to influence the actual system behavior, not just sit beside it as a separate report. By rerunning recommendations on nearby versions of the same profile, the system can detect when an answer is stable versus when it is fragile. That makes the final output more responsible because users see both the recommendation and evidence about how dependable it is.
 
-- why the system uses a content-based recommender
-- why the reliability audit is integrated into the main pipeline
-- what trade-offs were made around simplicity, interpretability, and scale
+The main trade-off was simplicity and interpretability versus scale and realism. The current rule-based scorer is transparent, fast, and easy to debug, which makes it strong for demonstration, testing, and responsible AI analysis. The downside is that it cannot capture deeper preference patterns the way a large-scale learned recommender could, and its quality is limited by the size and diversity of the catalog. I accepted that trade-off because this project is meant to show thoughtful AI system design, not just maximize recommendation complexity.
 
 ## Testing Summary
 
