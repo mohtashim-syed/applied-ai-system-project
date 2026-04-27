@@ -4,7 +4,7 @@
 
 This project is a content-based AI music recommender that matches a listener profile to songs in a small catalog and explains why each recommendation was chosen. Its most important upgrade is a built-in reliability layer: before finalizing results, the system perturbs the user profile slightly, reruns the ranking, and measures whether the same songs remain near the top. That matters because an AI system should not only produce answers, it should also help users understand when those answers are stable and when they should be treated cautiously.
 
-The screenshots of the demo are located in the /assets folder.
+The screenshot walkthrough, showing the system running end-to-end with at least 2-3 example inputs and AI responses, are located in the /assets folder.
 
 ## Original Project From Modules 1-3
 
