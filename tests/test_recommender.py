@@ -7,6 +7,7 @@ from src.recommender import (
     UserProfile,
     build_reliability_report,
     recommend_songs,
+    trace_recommendation_pipeline,
 )
 
 def make_small_recommender() -> Recommender:
@@ -180,3 +181,68 @@ def test_reliability_report_warns_for_missing_genre():
 def test_recommend_songs_rejects_non_positive_k():
     with pytest.raises(RecommendationError):
         recommend_songs({"genre": "pop", "mood": "happy", "target_energy": 0.8}, [], k=0)
+
+
+def test_trace_recommendation_pipeline_exposes_candidates_and_variant_count():
+    songs = [
+        {
+            "id": 1,
+            "title": "Test Pop Track",
+            "artist": "Test Artist",
+            "genre": "pop",
+            "mood": "happy",
+            "energy": 0.8,
+            "tempo_bpm": 120,
+            "valence": 0.9,
+            "danceability": 0.8,
+            "acousticness": 0.2,
+            "speechiness": 0.0,
+            "instrumentalness": 0.0,
+            "liveness": 0.1,
+            "popularity": 80,
+            "release_decade": 2020,
+            "mood_intensity": 0.8,
+            "key": "major",
+            "complexity": 0.4,
+        },
+        {
+            "id": 2,
+            "title": "Chill Lofi Loop",
+            "artist": "Test Artist",
+            "genre": "lofi",
+            "mood": "chill",
+            "energy": 0.4,
+            "tempo_bpm": 80,
+            "valence": 0.6,
+            "danceability": 0.5,
+            "acousticness": 0.9,
+            "speechiness": 0.0,
+            "instrumentalness": 0.6,
+            "liveness": 0.05,
+            "popularity": 45,
+            "release_decade": 2020,
+            "mood_intensity": 0.5,
+            "key": "minor",
+            "complexity": 0.25,
+        },
+    ]
+    trace = trace_recommendation_pipeline(
+        {
+            "genre": "pop",
+            "mood": "happy",
+            "target_energy": 0.8,
+            "target_valence": 0.85,
+            "target_acousticness": 0.2,
+            "target_popularity": 80,
+            "target_decade": 2020,
+            "target_mood_intensity": 0.8,
+            "target_key": "major",
+            "target_complexity": 0.4,
+        },
+        songs,
+        k=2,
+    )
+
+    assert trace.variant_count > 0
+    assert len(trace.top_candidates) == 2
+    assert trace.top_candidates[0]["title"] == "Test Pop Track"

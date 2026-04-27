@@ -5,6 +5,7 @@ Usage:
     python src/main.py                      # runs ACTIVE_PROFILE
     python src/main.py <profile_name>       # runs a named profile
     python src/main.py --list               # prints all available profiles
+    python src/main.py --trace <profile>    # prints intermediate scoring steps
 """
 
 import logging
@@ -14,169 +15,9 @@ from recommender import (
     build_reliability_report,
     load_songs,
     recommend_songs,
+    trace_recommendation_pipeline,
 )
-
-# ---------------------------------------------------------------------------
-# Standard profiles — coherent, expected taste shapes
-# ---------------------------------------------------------------------------
-
-PROFILES = {
-
-    # ── Standard profiles ────────────────────────────────────────────────────
-
-    "high_energy_pop": {
-        "genre":                  "pop",
-        "mood":                   "happy",
-        "target_energy":          0.90,
-        "target_valence":         0.85,
-        "target_acousticness":    0.08,
-        "target_popularity":      82,
-        "target_decade":          2020,
-        "target_mood_intensity":  0.82,
-        "target_key":             "major",
-        "target_complexity":      0.45,
-    },
-    "chill_lofi": {
-        "genre":                  "lofi",
-        "mood":                   "chill",
-        "target_energy":          0.38,
-        "target_valence":         0.58,
-        "target_acousticness":    0.80,
-        "target_popularity":      45,
-        "target_decade":          2020,
-        "target_mood_intensity":  0.50,
-        "target_key":             "minor",
-        "target_complexity":      0.28,
-    },
-    "deep_intense_rock": {
-        "genre":                  "rock",
-        "mood":                   "intense",
-        "target_energy":          0.92,
-        "target_valence":         0.45,
-        "target_acousticness":    0.10,
-        "target_popularity":      60,
-        "target_decade":          2010,
-        "target_mood_intensity":  0.90,
-        "target_key":             "minor",
-        "target_complexity":      0.72,
-    },
-
-    # ── Adversarial / edge-case profiles ─────────────────────────────────────
-    # These are designed to expose weaknesses in the scoring logic.
-
-    "sad_banger": {
-        # Contradiction: mood=sad expects low energy, but energy=0.92 is near max.
-        # Also targets metal genre, but no metal song has mood=sad.
-        # Exposes: can the scorer serve both signals at once, or does one cancel out?
-        "genre":                  "metal",
-        "mood":                   "sad",
-        "target_energy":          0.92,
-        "target_valence":         0.25,
-        "target_acousticness":    0.08,
-        "target_popularity":      55,
-        "target_decade":          2010,
-        "target_mood_intensity":  0.95,
-        "target_key":             "minor",
-        "target_complexity":      0.80,
-    },
-    "ghost_genre": {
-        # Genre "bluegrass" does not exist in the catalog — genre match is
-        # permanently unavailable (always 0 pts). The ranking falls entirely
-        # to mood + numerical proximity, revealing what the scorer does without
-        # its second-highest categorical signal.
-        "genre":                  "bluegrass",
-        "mood":                   "chill",
-        "target_energy":          0.35,
-        "target_valence":         0.62,
-        "target_acousticness":    0.80,
-        "target_popularity":      40,
-        "target_decade":          2020,
-        "target_mood_intensity":  0.42,
-        "target_key":             "major",
-        "target_complexity":      0.25,
-    },
-    "neutral_listener": {
-        # All numerical targets are at 0.5 — the exact midpoint of every scale.
-        # No song is very close OR very far on any numerical feature.
-        # Only categorical matches (mood, genre) can create meaningful separation.
-        # Exposes: does the system produce a sensible ranking on sparse signal?
-        "genre":                  "ambient",
-        "mood":                   "relaxed",
-        "target_energy":          0.50,
-        "target_valence":         0.65,
-        "target_acousticness":    0.50,
-        "target_popularity":      50,
-        "target_decade":          2020,
-        "target_mood_intensity":  0.50,
-        "target_key":             "",
-        "target_complexity":      0.50,
-    },
-
-    # ── Previously defined profiles ──────────────────────────────────────────
-
-    "pop_happy": {
-        "genre":                  "pop",
-        "mood":                   "happy",
-        "target_energy":          0.80,
-        "target_valence":         0.84,
-        "target_acousticness":    0.18,
-        "target_popularity":      80,
-        "target_decade":          2020,
-        "target_mood_intensity":  0.78,
-        "target_key":             "major",
-        "target_complexity":      0.42,
-    },
-    "study": {
-        "genre":                  "lofi",
-        "mood":                   "focused",
-        "target_energy":          0.40,
-        "target_valence":         0.58,
-        "target_acousticness":    0.75,
-        "target_popularity":      40,
-        "target_decade":          2020,
-        "target_mood_intensity":  0.58,
-        "target_key":             "minor",
-        "target_complexity":      0.26,
-    },
-    "workout": {
-        "genre":                  "pop",
-        "mood":                   "intense",
-        "target_energy":          0.92,
-        "target_valence":         0.77,
-        "target_acousticness":    0.05,
-        "target_popularity":      85,
-        "target_decade":          2020,
-        "target_mood_intensity":  0.93,
-        "target_key":             "major",
-        "target_complexity":      0.50,
-    },
-    "night_drive": {
-        "genre":                  "synthwave",
-        "mood":                   "moody",
-        "target_energy":          0.76,
-        "target_valence":         0.49,
-        "target_acousticness":    0.20,
-        "target_popularity":      58,
-        "target_decade":          2010,
-        "target_mood_intensity":  0.76,
-        "target_key":             "minor",
-        "target_complexity":      0.55,
-    },
-    "hiphop": {
-        "genre":                  "hip-hop",
-        "mood":                   "confident",
-        "target_energy":          0.85,
-        "target_valence":         0.72,
-        "target_acousticness":    0.06,
-        "target_popularity":      80,
-        "target_decade":          2020,
-        "target_mood_intensity":  0.85,
-        "target_key":             "minor",
-        "target_complexity":      0.60,
-    },
-}
-
-ACTIVE_PROFILE = "high_energy_pop"
+from profiles import ACTIVE_PROFILE, PROFILES
 
 WIDTH = 60
 
@@ -216,6 +57,30 @@ def print_reliability_summary(report) -> None:
             print(f"    - {warning}")
 
 
+def print_trace(profile_name: str, songs: list) -> None:
+    """Print the intermediate reasoning chain for a recommendation run."""
+    trace = trace_recommendation_pipeline(PROFILES[profile_name], songs, k=5)
+    print_header(profile_name, trace.normalized_prefs)
+    print("\n  Decision Trace\n" + "-" * WIDTH)
+    print(f"  Normalized profile fields : {len(trace.normalized_prefs)}")
+    print(f"  Nearby profile variants   : {trace.variant_count}")
+    if trace.guardrail_warnings:
+        print("  Guardrail warnings:")
+        for warning in trace.guardrail_warnings:
+            print(f"    - {warning}")
+    print("\n  Top candidate chain")
+    for rank, candidate in enumerate(trace.top_candidates, start=1):
+        print(f"    {rank}. {candidate['title']} — {candidate['artist']}")
+        print(
+            "       "
+            f"base={candidate['base_score']:.2f}  "
+            f"stability={candidate['stability']:.0%}  "
+            f"blended={candidate['blended_score']:.2f}"
+        )
+        for reason in candidate["reasons"][:4]:
+            print(f"       {reason}")
+
+
 def run_profile(profile_name: str, songs: list) -> None:
     """Load a profile, score all songs, and print the top-5 ranking."""
     if profile_name not in PROFILES:
@@ -249,6 +114,16 @@ def main() -> None:
                 for name in PROFILES:
                     p = PROFILES[name]
                     print(f"  {name:<22} genre={p['genre']}, mood={p['mood']}")
+                sys.exit(0)
+            if arg == "--trace":
+                if len(sys.argv) < 3:
+                    print("Usage: python src/main.py --trace <profile_name>")
+                    sys.exit(1)
+                trace_profile = sys.argv[2]
+                if trace_profile not in PROFILES:
+                    print(f"Unknown profile '{trace_profile}'. Use --list to see options.")
+                    sys.exit(1)
+                print_trace(trace_profile, songs)
                 sys.exit(0)
             run_profile(arg, songs)
         else:

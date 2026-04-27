@@ -105,6 +105,15 @@ class ReliabilityReport:
     warnings: List[str]
 
 
+@dataclass
+class RecommendationTrace:
+    """Observable decision chain for one recommendation run."""
+    normalized_prefs: Dict[str, Any]
+    guardrail_warnings: List[str]
+    variant_count: int
+    top_candidates: List[Dict[str, Any]]
+
+
 class RecommendationError(ValueError):
     """Raised when inputs cannot be safely processed."""
 
@@ -417,6 +426,36 @@ def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tup
         normalized_prefs.get("mood") or normalized_prefs.get("favorite_mood"),
     )
     return results
+
+
+def trace_recommendation_pipeline(user_prefs: Dict, songs: List[Dict], k: int = 5) -> RecommendationTrace:
+    """Return an observable reasoning trace for the top recommendation candidates."""
+    if k <= 0:
+        raise RecommendationError("k must be at least 1.")
+
+    normalized_prefs = dict(user_prefs)
+    guardrail_warnings = validate_user_prefs(normalized_prefs, songs)
+    scored_rows = _score_catalog(normalized_prefs, songs, include_stability=True, k=k)
+    scored_rows.sort(key=lambda item: item["blended_score"], reverse=True)
+
+    top_candidates = []
+    for row in scored_rows[:k]:
+        top_candidates.append({
+            "title": row["song"]["title"],
+            "artist": row["song"]["artist"],
+            "base_score": row["score"],
+            "stability": row["stability"],
+            "blended_score": row["blended_score"],
+            "reason_count": len(row["reasons"]),
+            "reasons": list(row["reasons"]),
+        })
+
+    return RecommendationTrace(
+        normalized_prefs=normalized_prefs,
+        guardrail_warnings=guardrail_warnings,
+        variant_count=len(_generate_stability_variants(normalized_prefs)),
+        top_candidates=top_candidates,
+    )
 
 
 # ---------------------------------------------------------------------------

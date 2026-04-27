@@ -1,0 +1,13 @@
+flowchart TD
+    A["Human User<br/>selects or edits a listening profile"] --> B["CLI App<br/>src/main.py"]
+    B --> C["Catalog Loader<br/>load_songs(data/songs.csv)"]
+    B --> D["Guardrails<br/>validate_user_prefs()"]
+    C --> E["AI Recommender<br/>recommend_songs()"]
+    D --> E
+    E --> F["Scoring Engine<br/>score_song() on every song"]
+    E --> G["Reliability Tester<br/>build_reliability_report()<br/>nearby-profile perturbation checks"]
+    F --> H["Ranked Recommendations<br/>score + explanation + stability note"]
+    G --> H
+    G --> I["Human Review / QA<br/>reads warnings, stability ratio,<br/>and tests with edge-case profiles"]
+    H --> I
+    I --> J["Trusted Output<br/>final recommendations the user sees"]
