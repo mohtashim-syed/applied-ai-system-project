@@ -1,6 +1,7 @@
 import csv
+import logging
 from dataclasses import dataclass
-from typing import List, Dict, Tuple
+from typing import Any, Dict, List, Tuple
 
 # ---------------------------------------------------------------------------
 # Algorithm Recipe — point values for each feature (max total = 12.5 pts)
@@ -35,6 +36,25 @@ _POINTS = {
     "key_match":          0.25,   # exact match (major/minor)
     "complexity_max":     0.25,   # proximity to desired musical density
 }
+
+LOGGER = logging.getLogger(__name__)
+NUMERIC_PROFILE_LIMITS = {
+    "target_energy": (0.0, 1.0),
+    "target_valence": (0.0, 1.0),
+    "target_acousticness": (0.0, 1.0),
+    "target_popularity": (0.0, 100.0),
+    "target_mood_intensity": (0.0, 1.0),
+    "target_complexity": (0.0, 1.0),
+}
+STABILITY_DELTAS = {
+    "target_energy": 0.05,
+    "target_valence": 0.05,
+    "target_acousticness": 0.07,
+    "target_popularity": 8.0,
+    "target_mood_intensity": 0.06,
+    "target_complexity": 0.06,
+}
+STABILITY_BONUS = 0.75
 
 
 # ---------------------------------------------------------------------------
@@ -75,6 +95,20 @@ class UserProfile:
     likes_acoustic: bool          # True → prefers acoustic; False → prefers synthetic
 
 
+@dataclass
+class ReliabilityReport:
+    """Summary of recommendation stability and guardrail checks."""
+    variant_count: int
+    stable_recommendation_ratio: float
+    average_stability: float
+    low_stability_count: int
+    warnings: List[str]
+
+
+class RecommendationError(ValueError):
+    """Raised when inputs cannot be safely processed."""
+
+
 # ---------------------------------------------------------------------------
 # Functional interface  (used by src/main.py)
 # ---------------------------------------------------------------------------
@@ -82,30 +116,177 @@ class UserProfile:
 def load_songs(csv_path: str) -> List[Dict]:
     """Parse a songs CSV file and return a list of dicts with typed numeric fields."""
     songs = []
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            songs.append({
-                "id":               int(row["id"]),
-                "title":            row["title"],
-                "artist":           row["artist"],
-                "genre":            row["genre"],
-                "mood":             row["mood"],
-                "energy":           float(row["energy"]),
-                "tempo_bpm":        float(row["tempo_bpm"]),
-                "valence":          float(row["valence"]),
-                "danceability":     float(row["danceability"]),
-                "acousticness":     float(row["acousticness"]),
-                "speechiness":      float(row.get("speechiness", 0.0)),
-                "instrumentalness": float(row.get("instrumentalness", 0.0)),
-                "liveness":         float(row.get("liveness", 0.0)),
-                "popularity":       int(row.get("popularity", 50)),
-                "release_decade":   int(row.get("release_decade", 2020)),
-                "mood_intensity":   float(row.get("mood_intensity", 0.5)),
-                "key":              row.get("key", "major"),
-                "complexity":       float(row.get("complexity", 0.5)),
-            })
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                songs.append({
+                    "id":               int(row["id"]),
+                    "title":            row["title"],
+                    "artist":           row["artist"],
+                    "genre":            row["genre"],
+                    "mood":             row["mood"],
+                    "energy":           float(row["energy"]),
+                    "tempo_bpm":        float(row["tempo_bpm"]),
+                    "valence":          float(row["valence"]),
+                    "danceability":     float(row["danceability"]),
+                    "acousticness":     float(row["acousticness"]),
+                    "speechiness":      float(row.get("speechiness", 0.0)),
+                    "instrumentalness": float(row.get("instrumentalness", 0.0)),
+                    "liveness":         float(row.get("liveness", 0.0)),
+                    "popularity":       int(row.get("popularity", 50)),
+                    "release_decade":   int(row.get("release_decade", 2020)),
+                    "mood_intensity":   float(row.get("mood_intensity", 0.5)),
+                    "key":              row.get("key", "major"),
+                    "complexity":       float(row.get("complexity", 0.5)),
+                })
+    except FileNotFoundError as exc:
+        raise RecommendationError(f"Could not find song catalog at '{csv_path}'.") from exc
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RecommendationError(f"Song catalog '{csv_path}' contains invalid data: {exc}") from exc
+
+    if not songs:
+        raise RecommendationError(f"Song catalog '{csv_path}' is empty.")
+
+    LOGGER.info("Loaded %s songs from %s", len(songs), csv_path)
     return songs
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    """Keep numeric values inside inclusive bounds."""
+    return max(lower, min(upper, value))
+
+
+def validate_user_prefs(user_prefs: Dict[str, Any], songs: List[Dict]) -> List[str]:
+    """Validate and normalize profile values in-place, returning any guardrail warnings."""
+    if not isinstance(user_prefs, dict):
+        raise RecommendationError("User preferences must be provided as a dictionary.")
+    if not songs:
+        raise RecommendationError("At least one song is required to generate recommendations.")
+
+    warnings: List[str] = []
+    for key, (lower, upper) in NUMERIC_PROFILE_LIMITS.items():
+        if key not in user_prefs or user_prefs[key] is None:
+            continue
+        value = float(user_prefs[key])
+        if value < lower or value > upper:
+            clamped = _clamp(value, lower, upper)
+            user_prefs[key] = clamped
+            warning = f"{key} was outside {lower:.0f}-{upper:.0f} and was clamped to {clamped:.2f}."
+            warnings.append(warning)
+            LOGGER.warning(warning)
+
+    catalog_genres = {song["genre"] for song in songs}
+    catalog_moods = {song["mood"] for song in songs}
+    target_genre = user_prefs.get("genre") or user_prefs.get("favorite_genre")
+    target_mood = user_prefs.get("mood") or user_prefs.get("favorite_mood")
+
+    if target_genre and target_genre not in catalog_genres:
+        warnings.append(
+            f"Requested genre '{target_genre}' is not in the catalog, so results will rely on mood and numeric similarity."
+        )
+    if target_mood and target_mood not in catalog_moods:
+        warnings.append(
+            f"Requested mood '{target_mood}' is not in the catalog, so exact mood matching is unavailable."
+        )
+    if (
+        target_mood == "sad"
+        and float(user_prefs.get("target_energy", 0.5)) > 0.85
+    ):
+        warnings.append(
+            "Profile asks for a very high-energy sad track, which is rare in this catalog, so recommendations may be less stable."
+        )
+
+    return warnings
+
+
+def _generate_stability_variants(user_prefs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Create small profile perturbations used to test recommendation consistency."""
+    variants = [dict(user_prefs)]
+    for key, delta in STABILITY_DELTAS.items():
+        if user_prefs.get(key) is None:
+            continue
+        lower, upper = NUMERIC_PROFILE_LIMITS[key]
+        base_value = float(user_prefs[key])
+        minus_variant = dict(user_prefs)
+        plus_variant = dict(user_prefs)
+        minus_variant[key] = _clamp(base_value - delta, lower, upper)
+        plus_variant[key] = _clamp(base_value + delta, lower, upper)
+        variants.extend([minus_variant, plus_variant])
+    return variants
+
+
+def _score_catalog(
+    user_prefs: Dict[str, Any],
+    songs: List[Dict],
+    *,
+    include_stability: bool,
+    k: int,
+) -> List[Dict[str, Any]]:
+    """Score the full catalog and optionally blend in stability-based confidence."""
+    base_rows = []
+    for song in songs:
+        score, reasons = score_song(user_prefs, song)
+        base_rows.append({
+            "song": song,
+            "score": score,
+            "reasons": reasons,
+            "stability": 1.0,
+            "blended_score": score,
+        })
+
+    if not include_stability:
+        return base_rows
+
+    variants = _generate_stability_variants(user_prefs)
+    appearances = {song["id"]: 0 for song in songs}
+    for variant in variants:
+        variant_rows = []
+        for song in songs:
+            variant_score, _ = score_song(variant, song)
+            variant_rows.append((song["id"], variant_score))
+        variant_rows.sort(key=lambda item: item[1], reverse=True)
+        for song_id, _ in variant_rows[:k]:
+            appearances[song_id] += 1
+
+    variant_count = len(variants)
+    for row in base_rows:
+        stability = appearances[row["song"]["id"]] / variant_count
+        row["stability"] = stability
+        row["blended_score"] = row["score"] + (stability * STABILITY_BONUS)
+        stability_label = "stable" if stability >= 0.7 else "watch closely"
+        row["reasons"] = row["reasons"] + [
+            f"reliability {stability_label} ({appearances[row['song']['id']]}/{variant_count} nearby profile checks)"
+        ]
+
+    return base_rows
+
+
+def build_reliability_report(user_prefs: Dict[str, Any], songs: List[Dict], k: int = 5) -> ReliabilityReport:
+    """Measure how robust the top-k results are under slight profile changes."""
+    warnings = validate_user_prefs(dict(user_prefs), songs)
+    scored_rows = _score_catalog(dict(user_prefs), songs, include_stability=True, k=k)
+    ranked_rows = sorted(scored_rows, key=lambda item: item["blended_score"], reverse=True)[:k]
+
+    if not ranked_rows:
+        return ReliabilityReport(variant_count=0, stable_recommendation_ratio=0.0, average_stability=0.0, low_stability_count=0, warnings=warnings)
+
+    variant_count = len(_generate_stability_variants(user_prefs))
+    average_stability = sum(row["stability"] for row in ranked_rows) / len(ranked_rows)
+    stable_count = sum(1 for row in ranked_rows if row["stability"] >= 0.7)
+    low_stability_count = sum(1 for row in ranked_rows if row["stability"] < 0.5)
+    if low_stability_count:
+        warnings.append(
+            f"{low_stability_count} recommendation(s) changed a lot during nearby-profile checks, so treat them as lower-confidence suggestions."
+        )
+
+    return ReliabilityReport(
+        variant_count=variant_count,
+        stable_recommendation_ratio=stable_count / len(ranked_rows),
+        average_stability=average_stability,
+        low_stability_count=low_stability_count,
+        warnings=warnings,
+    )
 
 
 def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
@@ -213,14 +394,29 @@ def score_song(user_prefs: Dict, song: Dict) -> Tuple[float, List[str]]:
 
 def recommend_songs(user_prefs: Dict, songs: List[Dict], k: int = 5) -> List[Tuple[Dict, float, str]]:
     """Score every song, sort by score descending, and return the top-k (song, score, explanation) tuples."""
-    scored = []
-    for song in songs:
-        score, reasons = score_song(user_prefs, song)
-        explanation = " | ".join(reasons)
-        scored.append((song, score, explanation))
+    if k <= 0:
+        raise RecommendationError("k must be at least 1.")
 
-    scored.sort(key=lambda item: item[1], reverse=True)
-    return scored[:k]
+    normalized_prefs = dict(user_prefs)
+    guardrail_warnings = validate_user_prefs(normalized_prefs, songs)
+    scored_rows = _score_catalog(normalized_prefs, songs, include_stability=True, k=k)
+    scored_rows.sort(key=lambda item: item["blended_score"], reverse=True)
+
+    results = []
+    for rank, row in enumerate(scored_rows[:k], start=1):
+        explanation_parts = list(row["reasons"])
+        if rank == 1:
+            explanation_parts.extend([f"guardrail: {warning}" for warning in guardrail_warnings])
+        explanation = " | ".join(explanation_parts)
+        results.append((row["song"], row["score"], explanation))
+
+    LOGGER.info(
+        "Generated %s recommendations for genre=%s mood=%s",
+        len(results),
+        normalized_prefs.get("genre") or normalized_prefs.get("favorite_genre"),
+        normalized_prefs.get("mood") or normalized_prefs.get("favorite_mood"),
+    )
+    return results
 
 
 # ---------------------------------------------------------------------------

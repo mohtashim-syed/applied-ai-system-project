@@ -1,17 +1,8 @@
-# 🎵 Music Recommender Simulation
+# 🎵 Reliability-Aware Music Recommender
 
 ## Project Summary
 
-In this project you will build and explain a small music recommender system.
-
-Your goal is to:
-
-- Represent songs and a user "taste profile" as data
-- Design a scoring rule that turns that data into recommendations
-- Evaluate what your system gets right and wrong
-- Reflect on how this mirrors real world AI recommenders
-
-Replace this paragraph with your own summary of what your version does.
+This project is a content-based AI music recommender that explains why each song was selected and now also audits how reliable those recommendations are. The system scores songs against a listener profile, then runs a built-in stability check by slightly perturbing the profile and measuring whether the same songs still appear near the top. That reliability signal is folded back into ranking and shown in the final explanation, so the application does more than recommend songs: it also tells you when its answers are stable and when they should be treated cautiously.
 
 ---
 
@@ -22,6 +13,18 @@ Real-world recommenders like Spotify and YouTube combine two strategies: collabo
 ---
 
 ### Algorithm Recipe
+
+### Integrated AI Reliability System
+
+The recommender includes a reliability layer inside the main application flow, not as a separate script.
+
+- Before returning results, the app generates nearby versions of the user profile by nudging energy, valence, acousticness, popularity, mood intensity, and complexity.
+- It re-scores the entire catalog for each nearby profile and measures how often each recommendation survives those perturbations.
+- Songs that remain strong across the audit earn a stability bonus in the final ranking.
+- Songs that fluctuate heavily are still shown when relevant, but their explanations are marked as lower-confidence.
+- The CLI prints a reliability summary with guardrail warnings, stable-result ratio, and average stability.
+
+This acts as a simple testing system for the AI logic because it checks recommendation consistency before the app commits to an answer.
 
 **Inputs:** one `UserProfile` (genre, mood, target_energy, target_valence, target_acousticness) and one `Song` dict per evaluation.
 
@@ -49,7 +52,7 @@ acoustic_pts = 0.5 × (1 − |song.acousticness − target_acousticness|)
 ```
 Acousticness distinguishes organic/quiet texture from synthetic/loud texture. It is a refining signal rather than a deciding one — hence the smallest point ceiling.
 
-**Total score:** 0.0 – 9.0 pts. All songs are sorted descending by total, and the top `k` are returned with a per-feature explanation.
+**Base score:** 0.0 – 12.5 pts. After scoring, the app adds a small stability bonus based on the reliability audit so that brittle recommendations do not outrank more dependable ones by accident.
 
 ---
 
@@ -162,7 +165,7 @@ flowchart TD
    source .venv/bin/activate      # Mac or Linux
    .venv\Scripts\activate         # Windows
 
-2. Install dependencies
+2. Install dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -172,6 +175,18 @@ pip install -r requirements.txt
 
 ```bash
 python src/main.py
+```
+
+4. Optional: list the built-in profiles:
+
+```bash
+python src/main.py --list
+```
+
+5. Optional: run a specific profile:
+
+```bash
+python src/main.py chill_lofi
 ```
 
 ### Sample Output
@@ -231,13 +246,27 @@ Loaded songs: 20
 ============================================================
 ```
 
+### Logging and Guardrails
+
+- The app logs catalog loading and recommendation runs with Python's built-in `logging` module.
+- Invalid numeric profile targets are clamped into safe ranges instead of silently producing nonsense scores.
+- Missing catalog files, malformed CSV rows, empty catalogs, and invalid `k` values raise explicit errors.
+- If a requested genre or mood is not present in the catalog, the app warns the user and explains that it is falling back to weaker signals.
+
 ### Running Tests
 
-Run the starter tests with:
+Run the test suite with:
 
 ```bash
 pytest
 ```
+
+The tests cover:
+
+- ranking behavior
+- explanation generation
+- integrated reliability reporting
+- guardrail handling for unsupported profiles and invalid inputs
 
 You can add more tests in `tests/test_recommender.py`.
 
@@ -646,4 +675,3 @@ A few sentences about what you learned:
 - What surprised you about how your system behaved
 - How did building this change how you think about real music recommenders
 - Where do you think human judgment still matters, even if the model seems "smart"
-

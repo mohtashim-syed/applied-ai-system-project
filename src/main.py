@@ -7,8 +7,14 @@ Usage:
     python src/main.py --list               # prints all available profiles
 """
 
+import logging
 import sys
-from recommender import load_songs, recommend_songs
+from recommender import (
+    RecommendationError,
+    build_reliability_report,
+    load_songs,
+    recommend_songs,
+)
 
 # ---------------------------------------------------------------------------
 # Standard profiles — coherent, expected taste shapes
@@ -174,6 +180,11 @@ ACTIVE_PROFILE = "high_energy_pop"
 
 WIDTH = 60
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s:%(name)s:%(message)s",
+)
+
 
 def print_header(profile_name: str, prefs: dict) -> None:
     """Print the profile banner."""
@@ -193,6 +204,18 @@ def print_recommendation(rank: int, song: dict, score: float, explanation: str) 
         print(f"         {reason}")
 
 
+def print_reliability_summary(report) -> None:
+    """Print the integrated recommendation reliability audit."""
+    print("\n  Reliability Audit\n" + "-" * WIDTH)
+    print(f"  Nearby profile checks run : {report.variant_count}")
+    print(f"  Stable top-5 ratio        : {report.stable_recommendation_ratio:.0%}")
+    print(f"  Average recommendation stability : {report.average_stability:.0%}")
+    if report.warnings:
+        print("  Guardrails:")
+        for warning in report.warnings:
+            print(f"    - {warning}")
+
+
 def run_profile(profile_name: str, songs: list) -> None:
     """Load a profile, score all songs, and print the top-5 ranking."""
     if profile_name not in PROFILES:
@@ -203,30 +226,36 @@ def run_profile(profile_name: str, songs: list) -> None:
     print_header(profile_name, user_prefs)
 
     recommendations = recommend_songs(user_prefs, songs, k=5)
+    reliability_report = build_reliability_report(user_prefs, songs, k=5)
 
     print(f"\n  Top {len(recommendations)} Recommendations\n" + "-" * WIDTH)
     for rank, (song, score, explanation) in enumerate(recommendations, start=1):
         print_recommendation(rank, song, score, explanation)
 
+    print_reliability_summary(reliability_report)
     print("\n" + "=" * WIDTH)
 
 
 def main() -> None:
     """Entry point — selects profile from argv or falls back to ACTIVE_PROFILE."""
-    songs = load_songs("data/songs.csv")
-    print(f"Loaded songs: {len(songs)}\n")
+    try:
+        songs = load_songs("data/songs.csv")
+        print(f"Loaded songs: {len(songs)}\n")
 
-    if len(sys.argv) > 1:
-        arg = sys.argv[1]
-        if arg == "--list":
-            print("Available profiles:")
-            for name in PROFILES:
-                p = PROFILES[name]
-                print(f"  {name:<22} genre={p['genre']}, mood={p['mood']}")
-            sys.exit(0)
-        run_profile(arg, songs)
-    else:
-        run_profile(ACTIVE_PROFILE, songs)
+        if len(sys.argv) > 1:
+            arg = sys.argv[1]
+            if arg == "--list":
+                print("Available profiles:")
+                for name in PROFILES:
+                    p = PROFILES[name]
+                    print(f"  {name:<22} genre={p['genre']}, mood={p['mood']}")
+                sys.exit(0)
+            run_profile(arg, songs)
+        else:
+            run_profile(ACTIVE_PROFILE, songs)
+    except RecommendationError as exc:
+        print(f"Error: {exc}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
